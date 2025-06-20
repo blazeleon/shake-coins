@@ -16,7 +16,7 @@ function App() {
         }}
       >
         <Box>
-          <Heading>dApp Starter Template</Heading>
+          <Heading>Shake Coins</Heading>
         </Box>
 
         <Box>
