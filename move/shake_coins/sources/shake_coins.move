@@ -20,6 +20,11 @@ public struct AdminCap has key {
 }
 
 /// Events
+public struct PrizePoolCreated has copy, drop {
+    id: ID,
+    amount: u64,
+}
+
 public struct PrizeDeposit has copy, drop {
     from: address,
     coin_type: String,
@@ -40,28 +45,34 @@ fun init(ctx: &mut TxContext) {
         },
         ctx.sender(),
     );
-
+    let pool_id = object::new(ctx);
+    // Emit an event for the creation of the prize pool
+    event::emit(PrizePoolCreated {
+        id: object::uid_to_inner(&pool_id),
+        amount: 0,
+    });
     // Create the prize pool and share it
     transfer::share_object(PrizePool {
-        id: object::new(ctx),
+        id: pool_id,
         amount: balance::zero<SUI>(),
     });
 }
 
+/// Returns the total amount of SUI coins in the prize pool.
+public fun get_prize_amount(prize_pool: &PrizePool): u64 {
+    balance::value(&prize_pool.amount)
+}
+
 /// Deposit SUI coins into the prize pool.
-public entry fun deposit_prize(
-    prize_pool: &mut PrizePool,
-    sui_object: &mut Coin<SUI>,
-    amount: u64,
-    ctx: &mut TxContext,
-) {
-    let new_coin = coin::split(sui_object, amount, ctx);
+public entry fun deposit_prize(prize_pool: &mut PrizePool, coins: Coin<SUI>, ctx: &mut TxContext) {
+    let amt = coin::value(&coins);
+    // Emit an event for the deposit
     event::emit(PrizeDeposit {
         from: ctx.sender(),
         coin_type: type_name::into_string(type_name::get<SUI>()),
-        amount,
+        amount: amt,
     });
-    coin::put<SUI>(&mut prize_pool.amount, new_coin);
+    coin::put<SUI>(&mut prize_pool.amount, coins);
 }
 
 /// Withdraw SUI coins from the prize pool.
@@ -74,7 +85,9 @@ public entry fun withdraw_prize(
     ctx: &mut TxContext,
 ) {
     let total_balance = balance::value<SUI>(&prize_pool.amount);
+    // Ensure the prize pool has enough balance to withdraw the requested amount
     assert!(total_balance >= amount, EBalanceIsInsufficient);
+    // Emit an event for the withdrawal
     event::emit(PrizeWithdraw {
         to: receiver,
         coin_type: type_name::into_string(type_name::get<SUI>()),
@@ -82,4 +95,9 @@ public entry fun withdraw_prize(
     });
     let withdrawn_coin: Coin<SUI> = coin::take<SUI>(&mut prize_pool.amount, amount, ctx);
     transfer::public_transfer(withdrawn_coin, receiver);
+}
+
+#[test_only]
+public fun init_for_testing(ctx: &mut TxContext) {
+    init(ctx);
 }
