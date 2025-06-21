@@ -7,6 +7,7 @@ use sui::balance::{Self, Balance};
 use sui::coin::{Self, Coin};
 use sui::event;
 use sui::sui::SUI;
+use sui::random::Random;
 
 const EBalanceIsInsufficient: u64 = 0;
 
@@ -61,6 +62,19 @@ fun init(ctx: &mut TxContext) {
 /// Returns the total amount of SUI coins in the prize pool.
 public fun get_prize_amount(prize_pool: &PrizePool): u64 {
     balance::value(&prize_pool.amount)
+}
+
+// === Entrypoints ===
+
+public entry fun shake(
+    prize_pool: &mut PrizePool,
+    coins: &mut Coin<SUI>,
+    content: u8,
+    random: &Random,
+    ctx: &mut TxContext,
+) {
+    // let total_prize = get_prize_amount(&prize_pool);
+
 }
 
 /// Deposit SUI coins into the prize pool.
