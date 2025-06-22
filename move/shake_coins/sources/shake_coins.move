@@ -6,10 +6,14 @@ use std::type_name;
 use sui::balance::{Self, Balance};
 use sui::coin::{Self, Coin};
 use sui::event;
-use sui::sui::SUI;
 use sui::random::Random;
+use sui::sui::SUI;
 
 const EBalanceIsInsufficient: u64 = 0;
+
+const RANDOM_HH: u8 = 0;
+const RANDOM_HT_TH: u8 = 1;
+const RANDOM_TT: u8 = 2;
 
 public struct PrizePool has key {
     id: UID,
@@ -36,6 +40,16 @@ public struct PrizeWithdraw has copy, drop {
     to: address,
     coin_type: String,
     amount: u64,
+}
+
+public struct ShakeResult has copy, drop {
+    user: address,
+    coin_amt: u64,
+    coin_type: String,
+    user_guess: u8,
+    shake_result: u8,
+    raw_random: u64,
+    is_winner: bool,
 }
 
 fun init(ctx: &mut TxContext) {
@@ -74,7 +88,35 @@ public entry fun shake(
     ctx: &mut TxContext,
 ) {
     // let total_prize = get_prize_amount(&prize_pool);
-
+    // todo
+    let mut random_generator = random::new_generator(random, ctx);
+    let random_value:u64 = random::generate_u64(&mut random_generator);
+    let result_item = random_value % 4;
+    let actual_result: u8;
+    if (result_item ==0) {
+        actual_result = RANDOM_HH;
+    } else if (result_item == 1 || result_item == 2) {
+        actual_result = RANDOM_HT_TH;
+    } else {
+        actual_result = RANDOM_TT;
+    }
+    let is_winner = (content == actual_result);
+    // Emit an event for the shake result
+    event::emit(ShakeResult {
+        user: ctx.sender(),
+        coin_amt: coin::value(&coins),
+        coin_type: type_name::into_string(type_name::get<SUI>()),
+        user_guess: content,
+        shake_result: actual_result,
+        raw_random: random_value,
+        is_winner,
+    });
+    if (is_winner) {
+        // Winner!
+        // TODO
+    } else {
+        coin::put<SUI>(&mut prize_pool.amount, coins);
+    }
 }
 
 /// Deposit SUI coins into the prize pool.
