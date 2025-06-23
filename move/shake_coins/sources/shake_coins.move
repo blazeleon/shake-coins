@@ -6,7 +6,7 @@ use std::type_name;
 use sui::balance::{Self, Balance};
 use sui::coin::{Self, Coin};
 use sui::event;
-use sui::random::Random;
+use sui::random::{Self, Random};
 use sui::sui::SUI;
 
 const EBalanceIsInsufficient: u64 = 0;
@@ -34,12 +34,14 @@ public struct PrizeDeposit has copy, drop {
     from: address,
     coin_type: String,
     amount: u64,
+    flow_type: FundFlowType,
 }
 
 public struct PrizeWithdraw has copy, drop {
     to: address,
     coin_type: String,
     amount: u64,
+    flow_type: FundFlowType,
 }
 
 public struct ShakeResult has copy, drop {
@@ -48,8 +50,15 @@ public struct ShakeResult has copy, drop {
     coin_type: String,
     user_guess: u8,
     shake_result: u8,
-    raw_random: u64,
     is_winner: bool,
+    total_rewards: u64,
+}
+
+public enum FundFlowType has copy, drop {
+    RewardsOut,
+    EarningsIn,
+    FoundationIn,
+    FoundationOut,
 }
 
 fun init(ctx: &mut TxContext) {
@@ -73,6 +82,25 @@ fun init(ctx: &mut TxContext) {
     });
 }
 
+fun deposit(prize_pool: &mut PrizePool, coins: Coin<SUI>, flow_type: FundFlowType, from: address) {
+    let amt = coin::value(&coins);
+    // Emit an event for the deposit
+    event::emit(PrizeDeposit {
+        from,
+        coin_type: type_name::into_string(type_name::get<SUI>()),
+        amount: amt,
+        flow_type,
+    });
+    coin::put<SUI>(&mut prize_pool.amount, coins);
+}
+
+fun withdraw(prize_pool: &mut PrizePool, amount: u64, ctx: &mut TxContext): Coin<SUI> {
+    let total_balance = balance::value<SUI>(&prize_pool.amount);
+    // Ensure the prize pool has enough balance to withdraw the requested amount
+    assert!(total_balance >= amount, EBalanceIsInsufficient);
+    coin::take<SUI>(&mut prize_pool.amount, amount, ctx)
+}
+
 /// Returns the total amount of SUI coins in the prize pool.
 public fun get_prize_amount(prize_pool: &PrizePool): u64 {
     balance::value(&prize_pool.amount)
@@ -80,55 +108,92 @@ public fun get_prize_amount(prize_pool: &PrizePool): u64 {
 
 // === Entrypoints ===
 
-public entry fun shake(
+/// Shake the coins and determine the result based on a random value.
+/// The user can guess the outcome of the shake, and if they guess correctly, they win a prize.
+/// The possible outcomes are:
+/// - 0: Heads and Heads (HH)
+/// - 1: Heads and Tails or Tails and Heads (HT or TH)
+/// - 2: Tails and Tails (TT)
+/// The user can guess 0, 1, or 2.
+/// For example: If the user guesses correctly, they win a prize based on the outcome:
+/// - If the outcome is HH or TT, they win 2.75x their bet amount.
+/// - If the outcome is HT or TH, they win 0.9x their bet amount.
+/// If the user guesses incorrectly, their bet amount is deposited into the prize pool.
+entry fun shake(
     prize_pool: &mut PrizePool,
-    coins: &mut Coin<SUI>,
-    content: u8,
+    coins: Coin<SUI>,
+    guess: u8,
     random: &Random,
     ctx: &mut TxContext,
 ) {
-    // let total_prize = get_prize_amount(&prize_pool);
-    // todo
+    let bet_amt = coin::value(&coins);
+    assert!(guess <= 2, 0);
+    // Using the random generator to determine the shake result
     let mut random_generator = random::new_generator(random, ctx);
-    let random_value:u64 = random::generate_u64(&mut random_generator);
-    let result_item = random_value % 4;
+    let random_value: u64 = random::generate_u64_in_range(&mut random_generator, 0, 3);
+    assert!(random_value < 4, 0);
     let actual_result: u8;
-    if (result_item ==0) {
+    // Mapping the random value to the shake result
+    if (random_value == 0) {
         actual_result = RANDOM_HH;
-    } else if (result_item == 1 || result_item == 2) {
-        actual_result = RANDOM_HT_TH;
-    } else {
+    } else if (random_value == 3) {
         actual_result = RANDOM_TT;
-    }
-    let is_winner = (content == actual_result);
-    // Emit an event for the shake result
-    event::emit(ShakeResult {
-        user: ctx.sender(),
-        coin_amt: coin::value(&coins),
-        coin_type: type_name::into_string(type_name::get<SUI>()),
-        user_guess: content,
-        shake_result: actual_result,
-        raw_random: random_value,
-        is_winner,
-    });
-    if (is_winner) {
-        // Winner!
-        // TODO
     } else {
-        coin::put<SUI>(&mut prize_pool.amount, coins);
+        // random_value is 1 or 2
+        actual_result = RANDOM_HT_TH;
+    };
+    let current_user = ctx.sender();
+    // Judge the result of the shake
+    if (guess == actual_result) {
+        // Winner!
+        let out_amt: u64;
+        if (actual_result == 0) {
+            out_amt = bet_amt * 275 / 100;
+        } else if (actual_result == 2) {
+            out_amt = bet_amt * 275 / 100;
+        } else {
+            out_amt = bet_amt * 90 / 100;
+        };
+        let rewards = withdraw(prize_pool, out_amt, ctx);
+        let mut new_coins = coins;
+        coin::join(&mut new_coins, rewards);
+        // Emit an event for the prize withdrawal
+        event::emit(PrizeWithdraw {
+            to: current_user,
+            coin_type: type_name::into_string(type_name::get<SUI>()),
+            amount: out_amt,
+            flow_type: FundFlowType::RewardsOut,
+        });
+        // Emit an event for the shake result
+        event::emit(ShakeResult {
+            user: current_user,
+            coin_amt: bet_amt,
+            coin_type: type_name::into_string(type_name::get<SUI>()),
+            user_guess: guess,
+            shake_result: actual_result,
+            is_winner: true,
+            total_rewards: coin::value(&new_coins),
+        });
+        transfer::public_transfer(new_coins, current_user);
+    } else {
+        // Loser!
+        // Emit an event for the shake result
+        event::emit(ShakeResult {
+            user: current_user,
+            coin_amt: bet_amt,
+            coin_type: type_name::into_string(type_name::get<SUI>()),
+            user_guess: guess,
+            shake_result: actual_result,
+            is_winner: false,
+            total_rewards: 0,
+        });
+        deposit(prize_pool, coins, FundFlowType::EarningsIn, current_user);
     }
 }
 
 /// Deposit SUI coins into the prize pool.
 public entry fun deposit_prize(prize_pool: &mut PrizePool, coins: Coin<SUI>, ctx: &mut TxContext) {
-    let amt = coin::value(&coins);
-    // Emit an event for the deposit
-    event::emit(PrizeDeposit {
-        from: ctx.sender(),
-        coin_type: type_name::into_string(type_name::get<SUI>()),
-        amount: amt,
-    });
-    coin::put<SUI>(&mut prize_pool.amount, coins);
+    deposit(prize_pool, coins, FundFlowType::FoundationIn, ctx.sender());
 }
 
 /// Withdraw SUI coins from the prize pool.
@@ -140,16 +205,14 @@ public entry fun withdraw_prize(
     receiver: address,
     ctx: &mut TxContext,
 ) {
-    let total_balance = balance::value<SUI>(&prize_pool.amount);
-    // Ensure the prize pool has enough balance to withdraw the requested amount
-    assert!(total_balance >= amount, EBalanceIsInsufficient);
+    let withdrawn_coin = withdraw(prize_pool, amount, ctx);
     // Emit an event for the withdrawal
     event::emit(PrizeWithdraw {
         to: receiver,
         coin_type: type_name::into_string(type_name::get<SUI>()),
         amount,
+        flow_type: FundFlowType::FoundationOut,
     });
-    let withdrawn_coin: Coin<SUI> = coin::take<SUI>(&mut prize_pool.amount, amount, ctx);
     transfer::public_transfer(withdrawn_coin, receiver);
 }
 
