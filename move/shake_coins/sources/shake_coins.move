@@ -82,6 +82,7 @@ fun init(ctx: &mut TxContext) {
     });
 }
 
+/// Deposits coins into the prize pool.
 fun deposit(prize_pool: &mut PrizePool, coins: Coin<SUI>, flow_type: FundFlowType, from: address) {
     let amt = coin::value(&coins);
     // Emit an event for the deposit
@@ -94,11 +95,20 @@ fun deposit(prize_pool: &mut PrizePool, coins: Coin<SUI>, flow_type: FundFlowTyp
     coin::put<SUI>(&mut prize_pool.amount, coins);
 }
 
+/// Withdraws a specified amount from the prize pool.
+/// Returns the withdrawn coins.
 fun withdraw(prize_pool: &mut PrizePool, amount: u64, ctx: &mut TxContext): Coin<SUI> {
     let total_balance = balance::value<SUI>(&prize_pool.amount);
     // Ensure the prize pool has enough balance to withdraw the requested amount
     assert!(total_balance >= amount, EBalanceIsInsufficient);
     coin::take<SUI>(&mut prize_pool.amount, amount, ctx)
+}
+
+/// Returns a random value in the range [min, max).
+fun get_random_range(random: &Random, min: u64, max: u64, ctx: &mut TxContext): u8 {
+    let mut random_generator = random::new_generator(random, ctx);
+    let random_value: u64 = random::generate_u64_in_range(&mut random_generator, min, max);
+    random_value as u8
 }
 
 /// Returns the total amount of SUI coins in the prize pool.
@@ -129,8 +139,9 @@ entry fun shake(
     let bet_amt = coin::value(&coins);
     assert!(guess <= 2, 0);
     // Using the random generator to determine the shake result
-    let mut random_generator = random::new_generator(random, ctx);
-    let random_value: u64 = random::generate_u64_in_range(&mut random_generator, 0, 3);
+    // let mut random_generator = random::new_generator(random, ctx);
+    // let random_value: u64 = random::generate_u64_in_range(&mut random_generator, 0, 3);
+    let random_value = get_random_range(random, 0, 3, ctx);
     assert!(random_value < 4, 0);
     let actual_result: u8;
     // Mapping the random value to the shake result
@@ -219,4 +230,9 @@ public entry fun withdraw_prize(
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
     init(ctx);
+}
+
+#[test_only]
+public fun get_random_for_testing(random: &Random, min: u64, max: u64, ctx: &mut TxContext): u8 {
+    get_random_range(random, min, max, ctx)
 }
