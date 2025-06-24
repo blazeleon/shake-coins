@@ -2,6 +2,7 @@
 module shake_coins::shake_coins_tests;
 
 use shake_coins::shake_coins::{Self, PrizePool, AdminCap};
+use std::debug;
 use sui::coin::{mint_for_testing, Coin};
 use sui::random::{Self, Random};
 use sui::sui::SUI;
@@ -98,5 +99,118 @@ fun test_random() {
     assert!(vector::contains<u8>(&list, &expected_3), 0);
 
     test_scenario::return_shared(random_state);
+    test_scenario::end(scenario_val);
+}
+
+#[test]
+fun test_shake() {
+    let current_user = @0x0;
+    let mut scenario_val = test_scenario::begin(current_user);
+    let scenario = &mut scenario_val;
+
+    shake_coins::init_for_testing(test_scenario::ctx(scenario));
+
+    random::create_for_testing(scenario.ctx());
+    test_scenario::next_tx(scenario, current_user);
+    let mut random_state: Random = test_scenario::take_shared<Random>(scenario);
+    random_state.update_randomness_state_for_testing(
+        0,
+        x"1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F",
+        scenario.ctx(),
+    );
+    let mut prize_pool = test_scenario::take_shared<PrizePool>(scenario);
+    assert_eq(shake_coins::get_prize_amount(&prize_pool), 0);
+
+    let initial_rewards: u64 = 100000000;
+    let prize_coins: Coin<SUI> = mint_for_testing<SUI>(
+        initial_rewards,
+        scenario.ctx(),
+    );
+    shake_coins::deposit_prize(
+        &mut prize_pool,
+        prize_coins,
+        scenario.ctx(),
+    );
+    assert_eq(shake_coins::get_prize_amount(&prize_pool), initial_rewards);
+
+    let user_funds: u64 = 1000000;
+    let user_coins: Coin<SUI> = mint_for_testing<SUI>(user_funds, scenario.ctx());
+
+    let guess: u8 = 2;
+    let (is_winner, actual_result) = shake_coins::shake_for_testing(
+        &mut prize_pool,
+        user_coins,
+        guess,
+        &random_state,
+        scenario.ctx(),
+    );
+    let current_prize_amount = shake_coins::get_prize_amount(&prize_pool);
+    debug::print(&actual_result);
+    debug::print(&current_prize_amount);
+
+    if (is_winner) {
+        let rewards = shake_coins::calculate_rewards(actual_result, user_funds);
+        assert_eq(current_prize_amount, initial_rewards - rewards);
+    } else {
+        assert_eq(current_prize_amount, initial_rewards + user_funds);
+    };
+    test_scenario::return_shared(random_state);
+    test_scenario::return_shared(prize_pool);
+    test_scenario::end(scenario_val);
+}
+
+#[test]
+#[expected_failure]
+fun test_shake_invalid_guess() {
+    let current_user = @0x0;
+    let mut scenario_val = test_scenario::begin(current_user);
+    let scenario = &mut scenario_val;
+
+    shake_coins::init_for_testing(test_scenario::ctx(scenario));
+
+    random::create_for_testing(scenario.ctx());
+    test_scenario::next_tx(scenario, current_user);
+    let mut random_state: Random = test_scenario::take_shared<Random>(scenario);
+    random_state.update_randomness_state_for_testing(
+        0,
+        x"1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F",
+        scenario.ctx(),
+    );
+    let mut prize_pool = test_scenario::take_shared<PrizePool>(scenario);
+    assert_eq(shake_coins::get_prize_amount(&prize_pool), 0);
+
+    let initial_rewards: u64 = 10000000;
+    let prize_coins: Coin<SUI> = mint_for_testing<SUI>(
+        initial_rewards,
+        scenario.ctx(),
+    );
+    shake_coins::deposit_prize(
+        &mut prize_pool,
+        prize_coins,
+        scenario.ctx(),
+    );
+    assert_eq(shake_coins::get_prize_amount(&prize_pool), initial_rewards);
+
+    let user_funds: u64 = 1000000;
+    let user_coins: Coin<SUI> = mint_for_testing<SUI>(user_funds, scenario.ctx());
+    // This guess is invalid, should abort
+    let guess: u8 = 4;
+    let (is_winner, actual_result) = shake_coins::shake_for_testing(
+        &mut prize_pool,
+        user_coins,
+        guess,
+        &random_state,
+        scenario.ctx(),
+    );
+    debug::print(&actual_result);
+
+    if (is_winner) {
+        let rewards = shake_coins::calculate_rewards(actual_result, user_funds);
+        assert_eq(shake_coins::get_prize_amount(&prize_pool), initial_rewards - rewards);
+    } else {
+        assert_eq(shake_coins::get_prize_amount(&prize_pool), initial_rewards + user_funds);
+    };
+    test_scenario::return_shared(random_state);
+    test_scenario::return_shared(prize_pool);
     test_scenario::end(scenario_val);
 }
