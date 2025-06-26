@@ -12,14 +12,28 @@ use sui::sui::SUI;
 const EBalanceIsInsufficient: u64 = 0;
 const EInvalidRandomRange: u64 = 1;
 const EInvalidGuess: u64 = 2;
+const EDivisorCannotBeZero: u64 = 3;
 
 const RANDOM_HH: u8 = 0;
 const RANDOM_HT_TH: u8 = 1;
 const RANDOM_TT: u8 = 2;
 
+const DEFAULT_REWARD_HH: u64 = 275;
+const DEFAULT_REWARD_TT: u64 = 275;
+const DEFAULT_REWARD_HT: u64 = 90;
+const DEFAULT_DIVISOR: u64 = 100;
+const DEFAULT_MIN_BET_AMOUNT: u64 = 10000000; // 0.01 SUI
+
 public struct PrizePool has key {
     id: UID,
     amount: Balance<SUI>,
+    min_bet_amount: u64,
+    hh_multiplier: u64,
+    hh_divisor: u64,
+    tt_multiplier: u64,
+    tt_divisor: u64,
+    ht_th_multiplier: u64,
+    ht_th_divisor: u64,
 }
 
 public struct AdminCap has key {
@@ -58,6 +72,16 @@ public struct ShakeRecord has copy, drop {
     total_received_amt: u64,
 }
 
+public struct OddsUpdate has copy, drop {
+    pool_id: ID,
+    hh_multiplier: u64,
+    hh_divisor: u64,
+    tt_multiplier: u64,
+    tt_divisor: u64,
+    ht_th_multiplier: u64,
+    ht_th_divisor: u64,
+}
+
 public enum FundFlowType has copy, drop {
     RewardsOut,
     EarningsIn,
@@ -79,10 +103,26 @@ fun init(ctx: &mut TxContext) {
         id: object::uid_to_inner(&pool_id),
         amount: 0,
     });
+    event::emit(OddsUpdate {
+        pool_id: object::uid_to_inner(&pool_id),
+        hh_multiplier: DEFAULT_REWARD_HH,
+        hh_divisor: DEFAULT_DIVISOR,
+        tt_multiplier: DEFAULT_REWARD_TT,
+        tt_divisor: DEFAULT_DIVISOR,
+        ht_th_multiplier: DEFAULT_REWARD_HT,
+        ht_th_divisor: DEFAULT_DIVISOR,
+    });
     // Create the prize pool and share it
     transfer::share_object(PrizePool {
         id: pool_id,
         amount: balance::zero<SUI>(),
+        min_bet_amount: DEFAULT_MIN_BET_AMOUNT,
+        hh_multiplier: DEFAULT_REWARD_HH,
+        hh_divisor: DEFAULT_DIVISOR,
+        tt_multiplier: DEFAULT_REWARD_TT,
+        tt_divisor: DEFAULT_DIVISOR,
+        ht_th_multiplier: DEFAULT_REWARD_HT,
+        ht_th_divisor: DEFAULT_DIVISOR,
     });
 }
 
@@ -244,6 +284,34 @@ public entry fun withdraw_prize(
         flow_type: FundFlowType::FoundationOut,
     });
     transfer::public_transfer(withdrawn_coin, receiver);
+}
+
+public entry fun update_odds(
+    _: &AdminCap,
+    prize_pool: &mut PrizePool,
+    hh_multiplier: u64,
+    hh_divisor: u64,
+    tt_multiplier: u64,
+    tt_divisor: u64,
+    ht_th_multiplier: u64,
+    ht_th_divisor: u64,
+) {
+    assert!(hh_divisor > 0 && tt_divisor > 0 && ht_th_divisor > 0, EDivisorCannotBeZero);
+    prize_pool.hh_multiplier = hh_multiplier;
+    prize_pool.hh_divisor = hh_divisor;
+    prize_pool.tt_multiplier = tt_multiplier;
+    prize_pool.tt_divisor = tt_divisor;
+    prize_pool.ht_th_multiplier = ht_th_multiplier;
+    prize_pool.ht_th_divisor = ht_th_divisor;
+    event::emit(OddsUpdate {
+        pool_id: object::uid_to_inner(&prize_pool.id),
+        hh_multiplier,
+        hh_divisor,
+        tt_multiplier,
+        tt_divisor,
+        ht_th_multiplier,
+        ht_th_divisor,
+    });
 }
 
 #[test_only]
