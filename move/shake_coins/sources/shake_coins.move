@@ -13,6 +13,8 @@ const EBalanceIsInsufficient: u64 = 0;
 const EInvalidRandomRange: u64 = 1;
 const EInvalidGuess: u64 = 2;
 const EDivisorCannotBeZero: u64 = 3;
+const EBelowMinBet: u64 = 4;
+const EExceedsMaxBet: u64 = 5;
 
 const RANDOM_HH: u8 = 0;
 const RANDOM_HT_TH: u8 = 1;
@@ -23,11 +25,15 @@ const DEFAULT_REWARD_TT: u64 = 275;
 const DEFAULT_REWARD_HT: u64 = 90;
 const DEFAULT_DIVISOR: u64 = 100;
 const DEFAULT_MIN_BET_AMOUNT: u64 = 10000000; // 0.01 SUI
+const DEFAULT_MAX_BET_MULTIPLIER: u64 = 1;
+const DEFAULT_MAX_BET_DIVISOR: u64 = 10;
 
 public struct PrizePool has key {
     id: UID,
     amount: Balance<SUI>,
     min_bet_amount: u64,
+    max_bet_multiplier: u64,
+    max_bet_divisor: u64,
     hh_multiplier: u64,
     hh_divisor: u64,
     tt_multiplier: u64,
@@ -80,6 +86,20 @@ public struct OddsUpdate has copy, drop {
     tt_divisor: u64,
     ht_th_multiplier: u64,
     ht_th_divisor: u64,
+    hh_multiplier_new: u64,
+    hh_divisor_new: u64,
+    tt_multiplier_new: u64,
+    tt_divisor_new: u64,
+    ht_th_multiplier_new: u64,
+    ht_th_divisor_new: u64,
+}
+
+public struct BetLimitsUpdate has copy, drop {
+    pool_id: ID,
+    max_bet_multiplier: u64,
+    max_bet_divisor: u64,
+    max_bet_multiplier_new: u64,
+    max_bet_divisor_new: u64,
 }
 
 public enum FundFlowType has copy, drop {
@@ -103,20 +123,13 @@ fun init(ctx: &mut TxContext) {
         id: object::uid_to_inner(&pool_id),
         amount: 0,
     });
-    event::emit(OddsUpdate {
-        pool_id: object::uid_to_inner(&pool_id),
-        hh_multiplier: DEFAULT_REWARD_HH,
-        hh_divisor: DEFAULT_DIVISOR,
-        tt_multiplier: DEFAULT_REWARD_TT,
-        tt_divisor: DEFAULT_DIVISOR,
-        ht_th_multiplier: DEFAULT_REWARD_HT,
-        ht_th_divisor: DEFAULT_DIVISOR,
-    });
     // Create the prize pool and share it
     transfer::share_object(PrizePool {
         id: pool_id,
         amount: balance::zero<SUI>(),
         min_bet_amount: DEFAULT_MIN_BET_AMOUNT,
+        max_bet_multiplier: DEFAULT_MAX_BET_MULTIPLIER,
+        max_bet_divisor: DEFAULT_MAX_BET_DIVISOR,
         hh_multiplier: DEFAULT_REWARD_HH,
         hh_divisor: DEFAULT_DIVISOR,
         tt_multiplier: DEFAULT_REWARD_TT,
@@ -201,8 +214,14 @@ entry fun shake(
     ctx: &mut TxContext,
 ) {
     assert!(guess < 3, EInvalidGuess);
-    let (is_winner, actual_result, raw_value) = get_guess_result(guess, random, ctx);
     let bet_amt = coin::value(&bet_coins);
+    assert!(bet_amt >= prize_pool.min_bet_amount, EBelowMinBet);
+    let prize_pool_balance = balance::value<SUI>(&prize_pool.amount);
+    assert!(
+        bet_amt <= (prize_pool_balance * prize_pool.max_bet_multiplier / prize_pool.max_bet_divisor),
+        EExceedsMaxBet,
+    );
+    let (is_winner, actual_result, raw_value) = get_guess_result(guess, random, ctx);
     let current_user = ctx.sender();
     if (is_winner) {
         let payout = calculate_rewards(actual_result, bet_amt);
@@ -289,20 +308,29 @@ public entry fun withdraw_prize(
 public entry fun update_odds(
     _: &AdminCap,
     prize_pool: &mut PrizePool,
-    hh_multiplier: u64,
-    hh_divisor: u64,
-    tt_multiplier: u64,
-    tt_divisor: u64,
-    ht_th_multiplier: u64,
-    ht_th_divisor: u64,
+    hh_multiplier_new: u64,
+    hh_divisor_new: u64,
+    tt_multiplier_new: u64,
+    tt_divisor_new: u64,
+    ht_th_multiplier_new: u64,
+    ht_th_divisor_new: u64,
 ) {
-    assert!(hh_divisor > 0 && tt_divisor > 0 && ht_th_divisor > 0, EDivisorCannotBeZero);
-    prize_pool.hh_multiplier = hh_multiplier;
-    prize_pool.hh_divisor = hh_divisor;
-    prize_pool.tt_multiplier = tt_multiplier;
-    prize_pool.tt_divisor = tt_divisor;
-    prize_pool.ht_th_multiplier = ht_th_multiplier;
-    prize_pool.ht_th_divisor = ht_th_divisor;
+    assert!(
+        hh_divisor_new > 0 && tt_divisor_new > 0 && ht_th_divisor_new > 0,
+        EDivisorCannotBeZero,
+    );
+    let hh_multiplier = prize_pool.hh_multiplier;
+    let hh_divisor = prize_pool.hh_divisor;
+    let tt_multiplier = prize_pool.tt_multiplier;
+    let tt_divisor = prize_pool.tt_divisor;
+    let ht_th_multiplier = prize_pool.ht_th_multiplier;
+    let ht_th_divisor = prize_pool.ht_th_divisor;
+    prize_pool.hh_multiplier = hh_multiplier_new;
+    prize_pool.hh_divisor = hh_divisor_new;
+    prize_pool.tt_multiplier = tt_multiplier_new;
+    prize_pool.tt_divisor = tt_divisor_new;
+    prize_pool.ht_th_multiplier = ht_th_multiplier_new;
+    prize_pool.ht_th_divisor = ht_th_divisor_new;
     event::emit(OddsUpdate {
         pool_id: object::uid_to_inner(&prize_pool.id),
         hh_multiplier,
@@ -311,6 +339,32 @@ public entry fun update_odds(
         tt_divisor,
         ht_th_multiplier,
         ht_th_divisor,
+        hh_multiplier_new,
+        hh_divisor_new,
+        tt_multiplier_new,
+        tt_divisor_new,
+        ht_th_multiplier_new,
+        ht_th_divisor_new,
+    });
+}
+
+public entry fun update_bet_limits(
+    _: &AdminCap,
+    prize_pool: &mut PrizePool,
+    max_bet_multiplier_new: u64,
+    max_bet_divisor_new: u64,
+) {
+    assert!(max_bet_divisor_new > 0, EDivisorCannotBeZero);
+    let max_bet_multiplier = prize_pool.max_bet_multiplier;
+    let max_bet_divisor = prize_pool.max_bet_divisor;
+    prize_pool.max_bet_multiplier = max_bet_multiplier_new;
+    prize_pool.max_bet_divisor = max_bet_divisor_new;
+    event::emit(BetLimitsUpdate {
+        pool_id: object::uid_to_inner(&prize_pool.id),
+        max_bet_multiplier,
+        max_bet_divisor,
+        max_bet_multiplier_new,
+        max_bet_divisor_new,
     });
 }
 
